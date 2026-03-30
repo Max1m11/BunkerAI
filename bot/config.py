@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     bot_token: str = Field(validation_alias=AliasChoices("BOT_TOKEN"))
+    bot_username: str = Field(default="BunkerZbot", validation_alias=AliasChoices("BOT_USERNAME"))
     ai_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("AI_API_KEY", "ANTHROPIC_API_KEY"),

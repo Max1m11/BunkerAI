@@ -1,9 +1,14 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="hero-card">
-    <h2 class="hero-title">{{ ui.not_found_title }}</h2>
-    <p class="hero-text">{{ message }}</p>
-    <p class="hero-text hero-text--muted">{{ ui.not_found_action }}</p>
-</section>
+<div class="grid">
+    <section class="card error-card">
+        <div class="section-caption">{{ ui.error_eyebrow }}</div>
+        <div class="empty-state empty-state--static">
+            <div class="empty-title">{{ ui.not_found_title }}</div>
+            <div class="empty-copy">{{ message }}</div>
+            <div class="empty-copy empty-copy--muted">{{ ui.not_found_action }}</div>
+        </div>
+    </section>
+</div>
 {% endblock %}

@@ -7,6 +7,7 @@ import uvicorn
 
 from webapp.server import app
 
+from .commands import setup_bot_commands
 from .config import settings
 from .database import init_db
 from .handlers import group, private
@@ -19,6 +20,7 @@ dp.include_router(group.router)
 
 async def start_bot() -> None:
     await init_db()
+    await setup_bot_commands()
     if not scheduler.running:
         scheduler.start()
     await restore_game_deadlines()

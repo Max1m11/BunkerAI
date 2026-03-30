@@ -16,8 +16,16 @@ from ..game_logic import (
     revealed_keys,
     submit_vote,
 )
-from ..keyboards import get_reveal_kb, get_special_kb, get_vote_kb, get_webapp_kb
-from ..strings import private_hand_text, private_vote_prompt, special_condition_text, vote_saved_text
+from ..keyboards import get_reveal_kb, get_special_kb, get_vote_kb
+from ..message_hub import bind_player_message, clear_player_message, upsert_player_message
+from ..strings import (
+    private_hand_text,
+    private_lobby_wait_text,
+    private_start_intro_text,
+    private_vote_prompt,
+    special_condition_text,
+    vote_saved_text,
+)
 
 router = Router()
 
@@ -25,7 +33,7 @@ router = Router()
 async def _active_or_message(user_id: int, message: Message):
     active = await get_active_player_by_user(user_id)
     if not active:
-        await message.answer("Сейчас вы не участвуете ни в одной активной партии.")
+        await message.answer(private_start_intro_text())
         return None
     return active
 
@@ -36,26 +44,32 @@ def _reveal_markup(game, player):
         game.phase,
         game.round,
         condition=player_condition(player),
+        game=game,
     )
 
 
 async def _send_vote_prompt(message: Message, game, player, players: list) -> None:
     if game.phase != "voting" or player.faction_status not in {"alive", "exiled"}:
+        await clear_player_message(player, "vote")
         return
     vote_state = current_vote_state(game, players)
-    await message.answer(
+    await upsert_player_message(
+        player,
+        "vote",
         private_vote_prompt(
             game,
             vote_state["ballot_index"],
             vote_state["ballot_total"],
             revote=vote_state["revote"],
         ),
-        reply_markup=get_vote_kb(players, game.id, candidate_ids=vote_state["candidate_ids"]),
+        reply_markup=get_vote_kb(players, game.id, candidate_ids=vote_state["candidate_ids"], game=game),
     )
 
 
 async def _render_card_message(message: Message, game, player, players: list | None = None):
-    await message.answer(
+    await upsert_player_message(
+        player,
+        "hand",
         private_hand_text(
             game,
             player,
@@ -72,6 +86,7 @@ async def _render_card_message(message: Message, game, player, players: list | N
 
 
 async def _edit_card(call: CallbackQuery, game, player):
+    await bind_player_message(player, "hand", call.message.message_id)
     await call.message.edit_text(
         private_hand_text(
             game,
@@ -93,10 +108,13 @@ async def cmd_start_private(message: Message):
 
     game, player = active
     if game.phase == "lobby":
-        await message.answer(
-            "Лобби уже создано, но партия ещё не началась. Дождитесь команды /start_game от хоста.",
-            reply_markup=get_webapp_kb(game.id),
+        await upsert_player_message(
+            player,
+            "hand",
+            private_lobby_wait_text(),
+            reply_markup=get_reveal_kb(player, game.phase, game.round, game=game),
         )
+        await clear_player_message(player, "vote")
         return
 
     players = await get_players(game.id)
@@ -111,7 +129,9 @@ async def cmd_special(message: Message):
 
     game, player = active
     players = await get_players(game.id)
-    await message.answer(
+    await upsert_player_message(
+        player,
+        "special",
         special_condition_text(player_condition(player), player_special_state(player)),
         reply_markup=get_special_kb(player, game, players),
     )
@@ -126,7 +146,7 @@ async def cmd_vote_private(message: Message):
     game, player = active
     players = await get_players(game.id)
     if game.phase != "voting":
-        await message.answer("Сейчас тайное голосование не открыто.")
+        await upsert_player_message(player, "vote", "Сейчас тайное голосование не открыто.")
         return
     await _send_vote_prompt(message, game, player, players)
 
@@ -152,6 +172,7 @@ async def callback_special_menu(call: CallbackQuery, callback_data: SpecialMenuC
         return
 
     players = await get_players(game.id)
+    await bind_player_message(player, "special", call.message.message_id)
     await call.message.edit_text(
         special_condition_text(player_condition(player), player_special_state(player)),
         reply_markup=get_special_kb(player, game, players),
@@ -177,8 +198,15 @@ async def callback_special_use(call: CallbackQuery, callback_data: SpecialUseCal
         await call.answer("Не удалось обновить карточку.", show_alert=True)
         return
 
-    await call.message.edit_text(result.private_message)
-    await call.message.answer(
+    players = await get_players(game.id)
+    await bind_player_message(player, "special", call.message.message_id)
+    await call.message.edit_text(
+        f"{special_condition_text(player_condition(player), player_special_state(player))}\n\n<b>Результат:</b>\n{result.private_message}",
+        reply_markup=get_special_kb(player, game, players),
+    )
+    await upsert_player_message(
+        player,
+        "hand",
         private_hand_text(
             game,
             player,
@@ -222,6 +250,9 @@ async def callback_vote(call: CallbackQuery, callback_data: VoteCallback):
         await call.answer(str(exc), show_alert=True)
         return
 
+    player = await get_player(callback_data.game_id, call.from_user.id)
+    if player:
+        await bind_player_message(player, "vote", call.message.message_id)
     await call.answer(vote_saved_text(progress.total_votes, progress.total_expected))
     if progress.all_voted:
         await finish_voting_and_announce(callback_data.game_id)

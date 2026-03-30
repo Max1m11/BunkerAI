@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 
 from .cards import MODE_LABELS
+from .config import settings
 
 
 CARD_LABELS = {
@@ -12,6 +13,15 @@ CARD_LABELS = {
     "hobby": "Хобби",
     "luggage": "Багаж",
     "fact": "Факт",
+}
+
+CARD_ICONS = {
+    "biology": "🧬",
+    "profession": "💼",
+    "health": "🩺",
+    "hobby": "🎯",
+    "luggage": "🎒",
+    "fact": "📌",
 }
 
 PHASE_LABELS = {
@@ -25,6 +35,7 @@ PHASE_LABELS = {
 WEBAPP_UI = {
     "title": "Бункер 3.x",
     "game_label": "Партия",
+    "game_title": "Бункер",
     "round_label": "Раунд",
     "slots_label": "Мест в бункере",
     "alive_label": "Живые",
@@ -35,8 +46,26 @@ WEBAPP_UI = {
     "threats_label": "Угрозы финала",
     "revealed_label": "Раскрытые карты",
     "hidden_label": "Скрыто",
+    "hidden_cards_label": "Не раскрыто",
     "back_label": "Назад к партии",
     "open_cards_label": "Публичные карты игрока",
+    "all_players_tab": "Все игроки",
+    "alive_players_tab": "Живые",
+    "exiled_players_tab": "Изгнанные",
+    "candidates_tab": "На вылет",
+    "timer_label": "До конца",
+    "voting_private_cta": "Голосование в ЛС",
+    "voting_private_hint": "Голоса скрыты до конца раунда",
+    "private_visible_label": "Скрытые карты видны только вам",
+    "self_label": "Это вы",
+    "players_section_title": "Участники",
+    "exiled_section_title": "Сторона изгнанных",
+    "bunker_card_label": "Карта бункера",
+    "threat_card_label": "Угроза",
+    "profession_hidden": "Профессия скрыта",
+    "empty_revealed_title": "Пока нет открытых карт",
+    "empty_revealed_text": "Игрок ещё не раскрыл ни одной характеристики публично.",
+    "error_eyebrow": "MiniApp",
     "not_found_title": "Ничего не найдено",
     "not_found_action": "Проверьте ссылку из бота и попробуйте снова.",
 }
@@ -56,6 +85,10 @@ def mode_label(mode: str) -> str:
 
 def card_label(key: str) -> str:
     return CARD_LABELS.get(key, key)
+
+
+def bot_mention() -> str:
+    return f"@{settings.bot_username.lstrip('@')}"
 
 
 def player_status(player) -> str:
@@ -80,16 +113,65 @@ def player_status_badge(player) -> str:
     return "В игре"
 
 
-def new_game_text(game, host_name: str) -> str:
+def private_start_intro_text() -> str:
+    return (
+        "<b>БункерAI</b>\n\n"
+        "Я ИИ-ведущий партии и помогаю проводить игру: показываю вашу руку, принимаю тайные голоса "
+        "и подсказываю, что делать дальше.\n\n"
+        "<b>Что делать:</b>\n"
+        "• создайте партию в группе через /new_game\n"
+        "• присоединитесь к ней через /join\n"
+        "• после /start_game вернитесь сюда и снова нажмите /start\n\n"
+        "<b>Команды в личке:</b>\n"
+        "• /start — открыть свою руку и текущее состояние\n"
+        "• /special — посмотреть особое условие\n"
+        "• /vote — открыть приватное голосование, если оно активно"
+    )
+
+
+def private_lobby_wait_text() -> str:
+    return (
+        "Вы уже в лобби, но партия ещё не началась.\n"
+        "Дождитесь команды /start_game от инициатора лобби в группе, затем снова откройте /start здесь."
+    )
+
+
+def new_game_text(game, initiator_name: str) -> str:
     return (
         "<b>Создана новая партия «Бункер»</b>\n\n"
         f"<b>Катастрофа:</b> {safe(game.catastrophe_title)}\n"
         f"{safe(game.catastrophe_text)}\n\n"
         f"<b>Режим:</b> {safe(mode_label(game.mode))}\n"
-        f"<b>Ведущий:</b> {safe(host_name)}\n\n"
+        "<b>Ведущий:</b> ИИ\n"
+        f"<b>Инициатор:</b> {safe(initiator_name)}\n\n"
         "Присоединяйтесь кнопкой или через /join. "
-        "Хост может переключить режим прямо в лобби и запустить игру командой /start_game."
+        "Инициатор лобби может сменить режим и запустить игру командой /start_game."
     )
+
+
+def lobby_card_text(game, initiator_name: str, players: list | None = None) -> str:
+    lines = [
+        "<b>Создана новая партия «Бункер»</b>",
+        "",
+        f"<b>Катастрофа:</b> {safe(game.catastrophe_title)}",
+        safe(game.catastrophe_text),
+        "",
+        f"<b>Режим:</b> {safe(mode_label(game.mode))}",
+        "<b>Ведущий:</b> ИИ",
+        f"<b>Инициатор:</b> {safe(initiator_name)}",
+    ]
+    if players:
+        lines.append("")
+        lines.append(f"<b>Участники:</b> {len(players)}")
+        for index, player in enumerate(players, start=1):
+            username = f" (@{player.username})" if getattr(player, "username", None) else ""
+            lines.append(f"{index}. {safe(player.full_name)}{safe(username)}")
+    else:
+        lines.append("")
+        lines.append("<b>Участники:</b> пока никого.")
+    lines.append("")
+    lines.append("Присоединяйтесь кнопкой или через /join. Инициатор лобби может сменить режим и запустить игру командой /start_game.")
+    return "\n".join(lines)
 
 
 def lobby_players_text(players: list) -> str:
@@ -104,10 +186,6 @@ def lobby_players_text(players: list) -> str:
 
 def lobby_joined_text(player_name: str, count: int) -> str:
     return f"<b>{safe(player_name)}</b> присоединился к партии. Сейчас в лобби: {count}."
-
-
-def mode_changed_text(mode: str) -> str:
-    return f"Режим партии: <b>{safe(mode_label(mode))}</b>."
 
 
 def discussion_started_text(game, bunker_card: dict, alive_count: int, minutes: int) -> str:
@@ -177,27 +255,49 @@ def group_vote_redirect_text(game, ballot_index: int, ballot_total: int, revote:
 
 
 def private_hand_text(game, player, character_cards: dict, condition: dict, revealed: list[str], special_state: dict) -> str:
+    round_counts = dict(special_state.get("round_reveal_counts") or {})
+    bonus_rounds = set(special_state.get("extra_reveal_rounds") or [])
+    allowed_reveals = 2 if game.round in bonus_rounds else 1
+    revealed_this_round = int(round_counts.get(str(game.round), 0))
+
     lines = [
-        "<b>Ваша рука</b>",
+        "<b>🃏 Ваша рука</b>",
         "",
-        f"<b>Режим:</b> {safe(mode_label(game.mode))}",
-        f"<b>Фаза:</b> {safe(phase_label(game.phase))}",
-        f"<b>Раунд:</b> {game.round}/{game.round_limit}",
-        f"<b>Статус:</b> {safe(player_status(player))}",
-        f"<b>Катастрофа:</b> {safe(game.catastrophe_title)}",
+        "<b>🧭 Состояние партии</b>",
+        f"• <b>Режим:</b> {safe(mode_label(game.mode))}",
+        f"• <b>Фаза:</b> {safe(phase_label(game.phase))}",
+        f"• <b>Раунд:</b> {game.round}/{game.round_limit}",
+        f"• <b>Статус:</b> {safe(player_status(player))}",
+        f"• <b>Катастрофа:</b> {safe(game.catastrophe_title)}",
         "",
     ]
+
+    if game.phase == "discussion" and getattr(player, "faction_status", "alive") == "alive":
+        if revealed_this_round < allowed_reveals:
+            if game.round == 1:
+                lines.append("<b>🎙 Ваш ход:</b> в первом раунде нужно раскрыть профессию.")
+            else:
+                left = allowed_reveals - revealed_this_round
+                lines.append(f"<b>🎙 Ваш ход:</b> выберите карту для раскрытия кнопками ниже. Осталось раскрытий в этом раунде: {left}.")
+        else:
+            lines.append("<b>✅ В этом раунде вы уже раскрыли всё, что положено по правилам.</b>")
+        lines.append("")
+
+    lines.append("<b>👤 Карты персонажа</b>")
     for key in ("biology", "profession", "health", "hobby", "luggage", "fact"):
         card = character_cards.get(key)
         if not card:
             continue
-        icon = "Открыто" if key in revealed else "Скрыто"
-        lines.append(f"<b>{card_label(key)}:</b> {safe(card['text'])} <i>({icon})</i>")
+        icon = CARD_ICONS.get(key, "•")
+        visibility = "Открыто" if key in revealed else "Скрыто"
+        lines.append(f"{icon} <b>{card_label(key)}:</b> {safe(card['text'])}")
+        lines.append(f"<i>{visibility}</i>")
     lines.append("")
-    lines.append(f"<b>Особое условие:</b> {safe(condition.get('title', 'Неизвестно'))}")
+    lines.append("<b>⚖️ Особое условие</b>")
+    lines.append(f"<b>{safe(condition.get('title', 'Неизвестно'))}</b>")
     lines.append(safe(condition.get("text", "")))
     if special_state.get("goal_target_user_name"):
-        lines.append(f"<b>Тайная цель:</b> {safe(special_state['goal_target_user_name'])}")
+        lines.append(f"<b>🎯 Тайная цель:</b> {safe(special_state['goal_target_user_name'])}")
     return "\n".join(lines)
 
 
@@ -284,7 +384,7 @@ def finished_text(
     forced: bool = False,
 ) -> str:
     lines = [
-        "<b>Партия завершена</b>" if not forced else "<b>Партия остановлена ведущим</b>",
+        "<b>Партия завершена</b>" if not forced else "<b>Партия остановлена инициатором лобби</b>",
         "",
         f"<b>Режим:</b> {safe(mode_label(game.mode))}",
         f"<b>Катастрофа:</b> {safe(game.catastrophe_title)}",

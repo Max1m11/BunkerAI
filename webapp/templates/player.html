@@ -1,32 +1,99 @@
 {% extends "base.html" %}
 
-{% block content %}
-<a href="/webapp/{{ game.id }}" class="back-link">{{ ui.back_label }}</a>
-
-<section class="hero-card">
-    <div class="hero-row">
-        <span class="hero-chip">{{ player.status }}</span>
-        <span class="hero-chip">{{ ui.hidden_label }}: {{ player.hidden_count }}</span>
-        <span class="hero-chip">{{ game.mode_label }}</span>
+{% block scenario_bar %}
+<div class="scenario-bar">
+    <div class="scenario-info">
+        <span class="scenario-label">
+            {{ ui.round_label }} {{ game.round }}/{{ game.round_limit }}
+            · {{ ui.slots_label }}: {{ game.slots }}
+            {% if game.vote_state.active %}
+            · Бюллетень {{ game.vote_state.ballot_index }}/{{ game.vote_state.ballot_total }}
+            {% endif %}
+        </span>
+        <span class="scenario-name">{{ game.catastrophe.title }}</span>
+        <span class="scenario-copy">{{ game.scenario_hint }}</span>
     </div>
-    <h2 class="hero-title">{{ player.name }}</h2>
-    <p class="hero-text">{{ game.catastrophe_title }}</p>
-    <p class="hero-text hero-text--muted">{{ game.catastrophe_text }}</p>
-</section>
-
-<section class="player-card player-card--static">
-    <h3 class="section-title">{{ ui.open_cards_label }}</h3>
-    {% if player.revealed_cards %}
-    <div class="trait-list">
-        {% for key, value in player.revealed_cards.items() %}
-        <div class="trait-row">
-            <span class="trait-row__label">{{ card_labels[key] }}</span>
-            <span class="trait-row__value">{{ value }}</span>
-        </div>
-        {% endfor %}
+    {% if game.phase_deadline_at %}
+    <div class="timer-block" data-deadline-at="{{ game.phase_deadline_at }}" data-server-time="{{ game.server_time }}">
+        <div class="scenario-label">{{ ui.timer_label }}</div>
+        <div class="timer" data-timer-text>--:--</div>
     </div>
-    {% else %}
-    <div class="empty-box">У этого игрока пока нет публично раскрытых карт.</div>
     {% endif %}
-</section>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="grid">
+    <a href="/webapp/{{ game.id }}{% if viewer_user_id %}?viewer_user_id={{ viewer_user_id }}{% endif %}" class="back-link">‹ {{ ui.back_label }}</a>
+
+    <section class="card detail-card {% if player.is_candidate %}highlighted{% endif %}{% if player.is_viewer %} player-card--viewer{% endif %}">
+        <div class="detail-pills">
+            <span class="detail-pill">{{ player.status }}</span>
+            <span class="detail-pill">{{ ui.hidden_label }}: {{ player.hidden_count }}</span>
+            <span class="detail-pill">{{ game.mode_label }}</span>
+        </div>
+
+        <div class="card-header">
+            <div class="avatar avatar-{{ player.avatar_variant }}">{{ player.initials }}</div>
+            <div class="card-meta">
+                <div class="player-name">
+                    {{ player.name }}
+                    {% if player.is_viewer %}
+                    <span class="self-badge">{{ ui.self_label }}</span>
+                    {% endif %}
+                </div>
+                <div class="player-role">{{ player.subtitle }}</div>
+            </div>
+            <span class="status-chip status-chip--{{ player.faction_status }}">{{ player.status }}</span>
+        </div>
+
+        {% if player.revealed_traits %}
+        <div class="traits">
+            {% for trait in player.revealed_traits %}
+            <div class="trait trait--{{ trait.key }}{% if trait.full_width %} full{% endif %}{% if trait.masked %} trait--masked{% endif %}">
+                <span class="trait-label">{{ trait.label }}</span>
+                {% if trait.masked %}
+                <span class="trait-veil">{{ ui.private_visible_label }}</span>
+                {% endif %}
+                <span class="trait-value">{{ trait.value }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if player.is_viewer and player.hidden_count %}
+        <div class="locked-summary locked-summary--private">
+            <span class="lock-icon">🔒</span>
+            {{ ui.hidden_label }}: {{ player.hidden_count }} · {{ ui.private_visible_label }}
+        </div>
+        {% elif player.hidden_labels %}
+        <div class="locked-summary">
+            <span class="lock-icon">🔒</span>
+            {{ ui.hidden_cards_label }}: {{ player.hidden_labels | join(", ") }}
+        </div>
+        {% endif %}
+
+        {% if game.vote_state.active and player.is_candidate %}
+        <div class="vote-bar">
+            <div class="vote-info">
+                <span class="vote-text">{{ ui.voting_private_hint }}</span>
+            </div>
+            <span class="vote-btn">{{ ui.voting_private_cta }}</span>
+        </div>
+        {% endif %}
+    </section>
+
+    {% if not player.revealed_traits %}
+    <section class="empty-state">
+        <div class="empty-title">{{ ui.empty_revealed_title }}</div>
+        <div class="empty-copy">{{ ui.empty_revealed_text }}</div>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.setInterval(() => window.location.reload(), 10000);
+</script>
 {% endblock %}

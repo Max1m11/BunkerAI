@@ -9,23 +9,76 @@
     {% block head %}{% endblock %}
 </head>
 <body>
-    <header class="app-header">
-        <div>
-            <div class="eyebrow">{{ ui.game_label }}</div>
-            <h1 class="app-title">{{ ui.title }}</h1>
+    <header class="header">
+        <div class="header-top">
+            <span class="game-title">☢️ {{ ui.game_title }}</span>
+            {% if game is defined and game.phase_label %}
+            <div class="phase-badge">
+                <div class="phase-dot"></div>
+                {{ game.phase_label }}
+            </div>
+            {% endif %}
         </div>
-        {% if game is defined and game.phase_label %}
-        <div class="phase-pill">{{ game.phase_label }}</div>
-        {% endif %}
+        {% block tabs %}{% endblock %}
     </header>
 
-    <main class="page-shell">
+    {% block scenario_bar %}{% endblock %}
+
+    <main>
         {% block content %}{% endblock %}
     </main>
 
     <script>
         window.Telegram.WebApp.ready();
         window.Telegram.WebApp.expand();
+
+        const redirectToViewerAwarePage = () => {
+            const tgUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id;
+            if (!tgUserId) {
+                return;
+            }
+            const url = new URL(window.location.href);
+            if (url.searchParams.get("viewer_user_id") === String(tgUserId)) {
+                return;
+            }
+            url.searchParams.set("viewer_user_id", String(tgUserId));
+            window.location.replace(url.toString());
+        };
+
+        redirectToViewerAwarePage();
+
+        const formatCountdown = (value) => {
+            if (value <= 0) {
+                return "0:00";
+            }
+            const totalSeconds = Math.floor(value / 1000);
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = String(totalSeconds % 60).padStart(2, "0");
+            return `${minutes}:${seconds}`;
+        };
+
+        const bindCountdown = (node) => {
+            const deadline = node.dataset.deadlineAt;
+            const serverTime = node.dataset.serverTime;
+            const timerText = node.querySelector("[data-timer-text]");
+            if (!deadline || !serverTime || !timerText) {
+                return;
+            }
+
+            const deadlineMs = Date.parse(deadline);
+            const serverOffsetMs = Date.parse(serverTime) - Date.now();
+
+            const render = () => {
+                const nowMs = Date.now() + serverOffsetMs;
+                timerText.textContent = formatCountdown(deadlineMs - nowMs);
+            };
+
+            render();
+            window.setInterval(render, 1000);
+        };
+
+        document.querySelectorAll("[data-deadline-at]").forEach(bindCountdown);
     </script>
+    {% block scripts %}{% endblock %}
 </body>
 </html>

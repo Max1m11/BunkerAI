@@ -15,6 +15,7 @@ from .callbacks import (
     VoteCallback,
 )
 from .config import settings
+from .message_hub import get_game_ui_value
 from .strings import CARD_LABELS, mode_label
 
 
@@ -25,6 +26,38 @@ def get_webapp_kb(game_id: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Открыть MiniApp", web_app=WebAppInfo(url=url))],
         ]
     )
+
+
+def get_open_bot_button() -> InlineKeyboardButton:
+    username = settings.bot_username.lstrip("@")
+    return InlineKeyboardButton(text=f"Открыть @{username}", url=f"https://t.me/{username}")
+
+
+def get_return_to_chat_url(game) -> str | None:
+    if not game:
+        return None
+    messages = dict(get_game_ui_value(game, "messages", {}) or {})
+    message_id = messages.get("main")
+    if not message_id:
+        return None
+    chat_id = str(game.chat_id)
+    if not chat_id.startswith("-100"):
+        return None
+    return f"https://t.me/c/{chat_id[4:]}/{message_id}"
+
+
+def get_return_to_chat_button(game) -> InlineKeyboardButton | None:
+    url = get_return_to_chat_url(game)
+    if not url:
+        return None
+    return InlineKeyboardButton(text="Вернуться в чат", url=url)
+
+
+def _append_private_nav_rows(rows: list[list[InlineKeyboardButton]], game, game_id: str) -> None:
+    rows.append([get_webapp_kb(game_id).inline_keyboard[0][0]])
+    return_button = get_return_to_chat_button(game)
+    if return_button:
+        rows.append([return_button])
 
 
 def get_lobby_kb(game_id: str, current_mode: str) -> InlineKeyboardMarkup:
@@ -47,7 +80,16 @@ def get_next_phase_kb(game_id: str) -> InlineKeyboardMarkup:
     )
 
 
-def get_reveal_kb(player, game_phase: str, game_round: int, condition: dict | None = None) -> InlineKeyboardMarkup:
+def get_group_panel_kb(game_id: str, can_advance: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_advance:
+        rows.extend(get_next_phase_kb(game_id).inline_keyboard)
+    rows.extend(get_webapp_kb(game_id).inline_keyboard)
+    rows.append([get_open_bot_button()])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_reveal_kb(player, game_phase: str, game_round: int, condition: dict | None = None, game=None) -> InlineKeyboardMarkup:
     character_cards = json.loads(player.character_cards or "{}")
     revealed = set(json.loads(player.revealed_character_keys or "[]"))
     special_state = json.loads(player.special_state or "{}")
@@ -81,11 +123,11 @@ def get_reveal_kb(player, game_phase: str, game_round: int, condition: dict | No
             ]
         )
 
-    rows.append([get_webapp_kb(player.game_id).inline_keyboard[0][0]])
+    _append_private_nav_rows(rows, game, player.game_id)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def get_vote_kb(players, game_id: str, candidate_ids: list[int] | None = None) -> InlineKeyboardMarkup:
+def get_vote_kb(players, game_id: str, candidate_ids: list[int] | None = None, game=None) -> InlineKeyboardMarkup:
     candidate_ids = candidate_ids or [player.user_id for player in players if player.faction_status == "alive"]
     rows: list[list[InlineKeyboardButton]] = []
     for player in players:
@@ -99,7 +141,7 @@ def get_vote_kb(players, game_id: str, candidate_ids: list[int] | None = None) -
                 )
             ]
         )
-    rows.append([get_webapp_kb(game_id).inline_keyboard[0][0]])
+    _append_private_nav_rows(rows, game, game_id)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -140,4 +182,7 @@ def get_special_kb(player, game, players) -> InlineKeyboardMarkup:
             )
         ]
     )
+    return_button = get_return_to_chat_button(game)
+    if return_button:
+        rows.append([return_button])
     return InlineKeyboardMarkup(inline_keyboard=rows)

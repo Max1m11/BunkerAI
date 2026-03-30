@@ -15,6 +15,7 @@ from .cards import (
     draw_character_cards,
     draw_special_condition,
     get_bunker_card,
+    get_scenario_by_id,
     get_threat_card,
     round_exiles_for,
 )
@@ -42,7 +43,7 @@ from .specials import (
     normalize_condition,
     player_tag_set,
 )
-from .strings import card_label, phase_label, player_status
+from .strings import card_label, mode_label, phase_label, player_status
 
 
 INFECTIOUS_TAG = "infection"
@@ -164,29 +165,141 @@ def build_revealed_cards(player: Player) -> dict[str, str]:
     return {key: cards[key]["text"] for key in revealed_keys(player) if key in cards}
 
 
-def build_public_player(player: Player) -> dict:
+AVATAR_VARIANTS = ("navy", "pink", "brown", "teal")
+
+
+def _player_initials(full_name: str) -> str:
+    parts = [part for part in full_name.replace("-", " ").split() if part]
+    if not parts:
+        return "??"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return f"{parts[0][0]}{parts[1][0]}".upper()
+
+
+def _avatar_variant(user_id: int) -> str:
+    return AVATAR_VARIANTS[abs(user_id) % len(AVATAR_VARIANTS)]
+
+
+def _player_subtitle(player: Player, revealed: dict[str, str], cards: dict[str, dict], is_viewer: bool) -> str:
+    if is_viewer and cards.get("profession"):
+        return cards["profession"]["text"]
+    if "profession" in revealed:
+        return revealed["profession"]
+    if player.faction_status in {"exiled", "winner", "lost"}:
+        return player_status(player)
+    return "Профессия скрыта"
+
+
+def _hidden_labels(player: Player) -> list[str]:
+    revealed = set(revealed_keys(player))
+    return [card_label(key) for key in CHARACTER_KEYS if key not in revealed]
+
+
+def _layout_trait_rows(rows: list[dict[str, str | bool]]) -> list[dict[str, str | bool]]:
+    open_half_index: int | None = None
+    for index, row in enumerate(rows):
+        if row["full_width"]:
+            if open_half_index is not None:
+                rows[open_half_index]["full_width"] = True
+            open_half_index = None
+            continue
+        if open_half_index is None:
+            open_half_index = index
+        else:
+            open_half_index = None
+    if open_half_index is not None:
+        rows[open_half_index]["full_width"] = True
+    return rows
+
+
+def _trait_rows(player: Player, cards: dict[str, dict], revealed: dict[str, str], is_viewer: bool) -> list[dict[str, str | bool]]:
+    rows: list[dict[str, str | bool]] = []
+    for key in CHARACTER_KEYS:
+        if is_viewer:
+            card = cards.get(key)
+            value = card["text"] if card else None
+            masked = key not in revealed
+        else:
+            value = revealed.get(key)
+            masked = False
+        if not value:
+            continue
+        rows.append(
+            {
+                "key": key,
+                "label": card_label(key),
+                "value": value,
+                "full_width": key == "fact",
+                "masked": masked,
+            }
+        )
+    return _layout_trait_rows(rows)
+
+
+def _sort_players_for_viewer(players: list[Player], viewer_user_id: int | None) -> list[Player]:
+    if viewer_user_id is None:
+        return list(players)
+    return sorted(
+        players,
+        key=lambda player: (
+            0 if player.user_id == viewer_user_id else 1,
+            player.full_name.lower(),
+        ),
+    )
+
+
+def build_public_player(player: Player, candidate_ids: set[int] | None = None, viewer_user_id: int | None = None) -> dict:
+    cards = player_cards(player)
     revealed = build_revealed_cards(player)
+    candidate_ids = candidate_ids or set()
+    is_viewer = viewer_user_id == player.user_id
     return {
         "id": player.id,
         "user_id": player.user_id,
         "name": player.full_name,
         "username": player.username,
+        "initials": _player_initials(player.full_name),
+        "avatar_variant": _avatar_variant(player.user_id),
+        "subtitle": _player_subtitle(player, revealed, cards, is_viewer),
         "faction_status": player.faction_status,
         "status": player_status(player),
+        "is_alive": player.faction_status == "alive",
+        "is_exiled": player.faction_status == "exiled",
+        "is_candidate": player.user_id in candidate_ids,
+        "is_viewer": is_viewer,
         "revealed_cards": revealed,
+        "revealed_traits": _trait_rows(player, cards, revealed, is_viewer),
         "hidden_count": max(0, len(CARD_KEYS) - len(revealed)),
+        "hidden_labels": [] if is_viewer else _hidden_labels(player),
     }
 
 
-def build_public_game_payload(game: Game, players: list[Player]) -> dict:
-    alive = alive_players(players)
-    exiled = exiled_players(players)
+def build_public_game_payload(game: Game, players: list[Player], viewer_user_id: int | None = None) -> dict:
+    sorted_players = _sort_players_for_viewer(players, viewer_user_id)
+    alive = _sort_players_for_viewer(alive_players(players), viewer_user_id)
+    exiled = _sort_players_for_viewer(exiled_players(players), viewer_user_id)
+    vote_state = current_vote_state(game, players) if players else {
+        "ballot_index": 1,
+        "ballot_total": 0,
+        "revote": False,
+        "candidate_ids": [],
+    }
+    vote_state = {
+        **vote_state,
+        "active": game.phase == "voting",
+        "candidate_count": len(vote_state["candidate_ids"]),
+    }
+    candidate_ids = set(vote_state["candidate_ids"]) if vote_state["active"] else set()
     return {
         "id": game.id,
         "mode": game.mode,
+        "mode_label": mode_label(game.mode),
         "phase": game.phase,
         "phase_label": phase_label(game.phase),
         "phase_step": game.phase_step,
+        "phase_deadline_at": game.phase_deadline_at,
+        "server_time": iso_now(),
         "round": game.round,
         "round_limit": game.round_limit,
         "slots": game.slots,
@@ -199,19 +312,26 @@ def build_public_game_payload(game: Game, players: list[Player]) -> dict:
         },
         "opened_bunker_cards": opened_bunker_cards(game),
         "opened_threat_cards": opened_threat_cards(game),
+        "vote_state": vote_state,
         "alive_count": len(alive),
         "exiled_count": len(exiled),
-        "alive_players": [build_public_player(player) for player in alive],
-        "exiled_players": [build_public_player(player) for player in exiled],
-        "players": [build_public_player(player) for player in players],
+        "viewer_user_id": viewer_user_id,
+        "alive_players": [build_public_player(player, candidate_ids=candidate_ids, viewer_user_id=viewer_user_id) for player in alive],
+        "exiled_players": [build_public_player(player, candidate_ids=candidate_ids, viewer_user_id=viewer_user_id) for player in exiled],
+        "players": [build_public_player(player, candidate_ids=candidate_ids, viewer_user_id=viewer_user_id) for player in sorted_players],
     }
 
 
-def build_public_player_payload(game: Game, player: Player) -> dict:
-    payload = build_public_player(player)
+def build_public_player_payload(game: Game, player: Player, viewer_user_id: int | None = None) -> dict:
+    payload = build_public_player(player, viewer_user_id=viewer_user_id)
     payload["game_id"] = game.id
     payload["mode"] = game.mode
+    payload["mode_label"] = mode_label(game.mode)
     payload["phase"] = game.phase
+    payload["phase_label"] = phase_label(game.phase)
+    payload["phase_deadline_at"] = game.phase_deadline_at
+    payload["server_time"] = iso_now()
+    payload["viewer_user_id"] = viewer_user_id
     return payload
 
 
@@ -377,21 +497,26 @@ def _evaluate_condition_bonus(owner: Player, side_players: list[Player], all_pla
     return bonus, notes
 
 
+def _catastrophe_rules(game: Game) -> tuple[list[str], list[str], list[str], int, bool]:
+    try:
+        scenario = get_scenario_by_id(game.catastrophe_id)
+    except KeyError as exc:
+        raise GameLogicError(f"Неизвестная катастрофа для финального расчёта: {game.catastrophe_id}.") from exc
+
+    return (
+        list(scenario.get("required_tags", [])),
+        list(scenario.get("helpful_tags", [])),
+        list(scenario.get("harmful_tags", [])),
+        int(scenario.get("threshold", 0)),
+        bool(scenario.get("requires_pair", False)),
+    )
+
+
 def _evaluate_side(game: Game, players: list[Player], side_name: str, use_bunker_cards: bool, all_players: list[Player]) -> tuple[int, bool, list[str]]:
     if not players:
         return 0, False, [f"Сторона {side_name} отсутствует."]
 
-    catastrophe_lookup = {
-        "cat_nuclear_winter": (["medicine", "engineering", "food", "repair"], ["security", "science", "logistics"], ["infection", "panic"], 8, True),
-        "cat_global_pandemic": (["medicine", "science", "sanitation"], ["discipline", "psychology", "food"], ["infection"], 8, True),
-        "cat_flood": (["repair", "navigation", "food"], ["medicine", "engineering", "security"], ["panic"], 7, True),
-        "cat_ice_age": (["food", "energy", "repair"], ["security", "discipline"], ["chronic_illness"], 7, True),
-        "cat_machine_uprising": (["engineering", "science", "energy"], ["repair", "discipline", "security"], ["panic"], 7, True),
-        "cat_asteroid": (["medicine", "repair", "food"], ["engineering", "discipline", "psychology"], ["panic", "infection"], 8, True),
-        "cat_supervolcano": (["sanitation", "food", "medicine"], ["engineering", "discipline"], ["respiratory", "panic"], 8, True),
-        "cat_solar_storm": (["repair", "food", "medicine"], ["engineering", "security"], ["panic"], 7, True),
-    }
-    required, helpful, harmful, threshold, requires_pair = catastrophe_lookup.get(game.catastrophe_id, catastrophe_lookup["cat_asteroid"])
+    required, helpful, harmful, threshold, requires_pair = _catastrophe_rules(game)
 
     team_tags = _team_tag_pool(players)
     notes: list[str] = []
@@ -483,7 +608,7 @@ async def choose_game_mode(game_id: str, host_id: int, mode: str) -> Game:
     if game.phase != "lobby":
         raise GameLogicError("Менять режим можно только в лобби.")
     if game.host_id != host_id:
-        raise GameLogicError("Режим может менять только хост.")
+        raise GameLogicError("Менять режим может только инициатор лобби.")
     if mode not in {"basic_final", "survival_story"}:
         raise GameLogicError("Неизвестный режим.")
     game.mode = mode
@@ -505,6 +630,7 @@ async def start_game(game_id: str) -> tuple[Game, list[Player], dict]:
 
     player_ids = [player.user_id for player in players]
     name_map = _target_name_map(players)
+    existing_game_ui = dict((endgame_state(game).get("_ui") or {}))
     bunker_deck_ids = [card["id"] for card in BUNKER_CARDS]
     random.shuffle(bunker_deck_ids)
     threat_deck_ids = [card["id"] for card in THREAT_CARDS]
@@ -514,9 +640,12 @@ async def start_game(game_id: str) -> tuple[Game, list[Player], dict]:
         cards = draw_character_cards()
         condition = draw_special_condition()
         state = initial_condition_state(condition, player.user_id, player_ids)
+        existing_player_ui = dict((player_special_state(player).get("_ui") or {}))
         target_id = state.get("goal_target_user_id")
         if target_id:
             state["goal_target_user_name"] = name_map.get(target_id)
+        if existing_player_ui:
+            state["_ui"] = existing_player_ui
         player.faction_status = "alive"
         player.is_exiled = 0
         set_player_cards(player, cards)
@@ -533,15 +662,15 @@ async def start_game(game_id: str) -> tuple[Game, list[Player], dict]:
     set_revote_state(game, {})
     set_opened_bunker_cards(game, [])
     set_opened_threat_cards(game, [])
-    set_endgame_state(
-        game,
-        {
-            "bunker_deck_ids": bunker_deck_ids,
-            "threat_deck_ids": threat_deck_ids,
-            "next_bunker_index": 0,
-            "next_threat_index": 0,
-        },
-    )
+    new_endgame_state = {
+        "bunker_deck_ids": bunker_deck_ids,
+        "threat_deck_ids": threat_deck_ids,
+        "next_bunker_index": 0,
+        "next_threat_index": 0,
+    }
+    if existing_game_ui:
+        new_endgame_state["_ui"] = existing_game_ui
+    set_endgame_state(game, new_endgame_state)
     opened_card = _open_next_bunker_card(game)
     game.phase_deadline_at = deadline_after(settings.discussion_minutes)
     game.updated_at = iso_now()

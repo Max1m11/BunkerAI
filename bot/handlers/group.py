@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
 from aiogram import F, Router
@@ -21,21 +22,22 @@ from ..game_logic import (
     opened_bunker_cards,
     opened_threat_cards,
 )
-from ..keyboards import get_lobby_kb, get_next_phase_kb, get_webapp_kb
+from ..keyboards import get_group_panel_kb, get_lobby_kb, get_webapp_kb
+from ..message_hub import get_game_ui_value, set_game_ui_value, upsert_game_message
 from ..models import Game
 from ..strings import (
     game_status_text,
     group_reveal_redirect_text,
     group_vote_redirect_text,
-    lobby_joined_text,
+    lobby_card_text,
     lobby_players_text,
-    mode_changed_text,
     new_game_text,
     player_status_badge,
     safe,
 )
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 def _is_host(user_id: int, game: Game) -> bool:
@@ -83,8 +85,11 @@ async def cmd_new_game(message: Message):
         updated_at=message.date.isoformat(),
     )
     await create_game(game)
-    await message.answer(
-        new_game_text(game, message.from_user.full_name),
+    await set_game_ui_value(game, "initiator_name", message.from_user.full_name)
+    await upsert_game_message(
+        game,
+        "main",
+        lobby_card_text(game, message.from_user.full_name, []),
         reply_markup=get_lobby_kb(game.id, game.mode),
     )
 
@@ -99,7 +104,13 @@ async def cmd_join(message: Message):
         return
 
     players = await get_players(game.id)
-    await message.answer(lobby_joined_text(message.from_user.full_name, len(players)))
+    initiator_name = get_game_ui_value(game, "initiator_name", message.from_user.full_name)
+    await upsert_game_message(
+        game,
+        "main",
+        lobby_card_text(game, initiator_name, players),
+        reply_markup=get_lobby_kb(game.id, game.mode),
+    )
 
 
 @router.callback_query(JoinGameCallback.filter())
@@ -117,7 +128,13 @@ async def cb_join_game(call: CallbackQuery, callback_data: JoinGameCallback):
 
     players = await get_players(game.id)
     await call.answer("Вы присоединились к партии.")
-    await call.message.answer(lobby_joined_text(call.from_user.full_name, len(players)))
+    initiator_name = get_game_ui_value(game, "initiator_name", call.from_user.full_name)
+    await upsert_game_message(
+        game,
+        "main",
+        lobby_card_text(game, initiator_name, players),
+        reply_markup=get_lobby_kb(game.id, game.mode),
+    )
 
 
 @router.callback_query(SetModeCallback.filter())
@@ -128,9 +145,14 @@ async def cb_set_mode(call: CallbackQuery, callback_data: SetModeCallback):
         await call.answer(str(exc), show_alert=True)
         return
 
-    if call.message:
-        await call.message.edit_reply_markup(reply_markup=get_lobby_kb(game.id, game.mode))
-        await call.message.answer(mode_changed_text(game.mode))
+    players = await get_players(game.id)
+    initiator_name = get_game_ui_value(game, "initiator_name", call.from_user.full_name)
+    await upsert_game_message(
+        game,
+        "main",
+        lobby_card_text(game, initiator_name, players),
+        reply_markup=get_lobby_kb(game.id, game.mode),
+    )
     await call.answer("Режим обновлён.")
 
 
@@ -156,13 +178,16 @@ async def cmd_start_game(message: Message):
         return
 
     if not _is_host(message.from_user.id, game):
-        await message.answer("Запустить партию может только хост.")
+        await message.answer("Запустить партию может только инициатор лобби.")
         return
 
     try:
         await start_game_and_announce(game.id)
     except GameLogicError as exc:
         await message.answer(str(exc))
+    except Exception:
+        logger.exception("Failed to start game %s", game.id)
+        await message.answer("Игра стартовала с ошибкой обновления сообщений. Попробуйте /status и /start в личке, если нужно восстановить интерфейс.")
 
 
 @router.message(Command("reveal"), F.chat.type.in_({"group", "supergroup"}))
@@ -203,13 +228,16 @@ async def cmd_next(message: Message):
         return
 
     if not _is_host(message.from_user.id, game):
-        await message.answer("Закрыть обсуждение может только хост.")
+        await message.answer("Закрыть обсуждение может только инициатор лобби.")
         return
 
     try:
         await close_discussion_and_announce(game.id)
     except GameLogicError as exc:
         await message.answer(str(exc))
+    except Exception:
+        logger.exception("Failed to close discussion for game %s", game.id)
+        await message.answer("Фаза сменилась с ошибкой обновления сообщений. Попробуйте /status.")
 
 
 @router.callback_query(NextPhaseCallback.filter())
@@ -219,13 +247,17 @@ async def cb_next_phase(call: CallbackQuery, callback_data: NextPhaseCallback):
         await call.answer("Партия уже завершена.", show_alert=True)
         return
     if not _is_host(call.from_user.id, game):
-        await call.answer("Закрыть обсуждение может только хост.", show_alert=True)
+        await call.answer("Закрыть обсуждение может только инициатор лобби.", show_alert=True)
         return
 
     try:
         await close_discussion_and_announce(game.id)
     except GameLogicError as exc:
         await call.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Failed to close discussion from callback for game %s", game.id)
+        await call.answer("Не удалось обновить сообщения после смены фазы.", show_alert=True)
         return
 
     await call.answer("Обсуждение закрыто.")
@@ -240,7 +272,9 @@ async def cmd_status(message: Message):
         return
 
     players = await get_players(game.id)
-    await message.answer(
+    await upsert_game_message(
+        game,
+        "main",
         game_status_text(
             game,
             len(alive_players(players)),
@@ -248,7 +282,7 @@ async def cmd_status(message: Message):
             opened_bunker_cards(game),
             opened_threat_cards(game),
         ),
-        reply_markup=get_webapp_kb(game.id),
+        reply_markup=get_group_panel_kb(game.id, can_advance=game.phase == "discussion"),
     )
 
 
@@ -261,7 +295,7 @@ async def cmd_end_game(message: Message):
         return
 
     if not _is_host(message.from_user.id, game):
-        await message.answer("Завершить партию может только хост.")
+        await message.answer("Завершить партию может только инициатор лобби.")
         return
 
     try:

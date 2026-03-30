@@ -3,24 +3,29 @@ from datetime import datetime, timezone
 
 import pytest
 
-from bot.cards import CHARACTER_KEYS, SPECIAL_CONDITIONS, get_random_scenario, get_special_condition
+from bot.cards import CHARACTER_KEYS, SCENARIOS, SPECIAL_CONDITIONS, get_random_scenario, get_special_condition
 from bot.config import settings
-from bot.database import create_game, get_game, get_player, get_players, init_db, save_player
+from bot.database import create_game, get_game, get_player, get_players, init_db, save_player, update_game
 from bot.game_logic import (
     GameLogicError,
+    _catastrophe_rules,
+    _evaluate_side,
     add_player_to_lobby,
     close_discussion,
     current_vote_state,
+    endgame_state,
     finish_voting_round,
     opened_bunker_cards,
     opened_threat_cards,
+    player_special_state,
     reveal_trait,
+    set_endgame_state,
     set_player_condition,
     set_player_special_state,
     start_game,
     submit_vote,
 )
-from bot.models import Game
+from bot.models import Game, Player
 from bot.specials import initial_condition_state
 
 
@@ -57,6 +62,59 @@ async def _create_lobby(tmp_path, player_count: int, mode: str = "basic_final") 
     for user_id in range(1, player_count + 1):
         await add_player_to_lobby(game, user_id, f"user{user_id}", f"Player {user_id}")
     return game
+
+
+def _scenario_game(scenario_id: str) -> Game:
+    scenario = next(item for item in SCENARIOS if item["id"] == scenario_id)
+    title = f"{scenario['emoji']} {scenario['title']}"
+    return Game(
+        id=f"game-{scenario_id}",
+        chat_id=100,
+        mode="survival_story",
+        scenario_id=scenario_id,
+        scenario_title=title,
+        scenario_hint=scenario["hint"],
+        phase="endgame",
+        phase_step="endgame",
+        round=5,
+        round_limit=5,
+        host_id=1,
+        slots=2,
+        catastrophe_id=scenario_id,
+        catastrophe_title=title,
+        catastrophe_text=scenario["text"],
+        opened_bunker_cards="[]",
+        opened_threat_cards="[]",
+        revote_state="{}",
+        endgame_state="{}",
+        phase_deadline_at=None,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+
+
+def _player_with_tags(user_id: int, biology_tags: list[str], extra_tags: list[str] | None = None) -> Player:
+    cards = {
+        "biology": {"text": f"Biology {user_id}", "tags": biology_tags},
+        "profession": {"text": f"Profession {user_id}", "tags": extra_tags or []},
+        "health": {"text": f"Health {user_id}", "tags": []},
+        "hobby": {"text": f"Hobby {user_id}", "tags": []},
+        "luggage": {"text": f"Luggage {user_id}", "tags": []},
+        "fact": {"text": f"Fact {user_id}", "tags": []},
+    }
+    return Player(
+        id=f"player-{user_id}",
+        game_id="game-test",
+        user_id=user_id,
+        username=f"user{user_id}",
+        full_name=f"Player {user_id}",
+        faction_status="alive",
+        is_exiled=0,
+        character_cards=json.dumps(cards),
+        special_condition="{}",
+        special_state="{}",
+        revealed_character_keys="[]",
+    )
 
 
 async def _neutralize_conditions(game_id: str) -> None:
@@ -96,6 +154,24 @@ async def test_start_game_uses_official_character_structure_and_slots(tmp_path):
     assert "phobia" not in cards
     assert condition["id"]
     assert condition["effect_code"]
+
+
+@pytest.mark.asyncio
+async def test_start_game_preserves_ui_bindings_for_group_and_private_messages(tmp_path):
+    game = await _create_lobby(tmp_path, player_count=4)
+    set_endgame_state(game, {"_ui": {"messages": {"main": 777}, "initiator_name": "Host"}})
+    await update_game(game)
+
+    players_before = await get_players(game.id)
+    first_player = players_before[0]
+    set_player_special_state(first_player, {"_ui": {"messages": {"hand": 111, "vote": 222}}})
+    await save_player(first_player)
+
+    started_game, started_players, _ = await start_game(game.id)
+
+    assert endgame_state(started_game).get("_ui", {}).get("messages", {}).get("main") == 777
+    started_first_player = next(player for player in started_players if player.id == first_player.id)
+    assert player_special_state(started_first_player).get("_ui", {}).get("messages", {}).get("hand") == 111
 
 
 @pytest.mark.asyncio
@@ -225,3 +301,75 @@ def test_special_conditions_have_real_effect_codes_and_no_phobia():
         assert card["official_prototype"] == "special_condition"
         assert "placeholder" not in card["id"]
         assert "phobia" not in card["id"]
+
+
+def test_endgame_uses_live_scenario_rules_from_cards_catalog():
+    for scenario in SCENARIOS:
+        game = _scenario_game(scenario["id"])
+        required, helpful, harmful, threshold, requires_pair = _catastrophe_rules(game)
+
+        assert required == scenario["required_tags"]
+        assert helpful == scenario["helpful_tags"]
+        assert harmful == scenario["harmful_tags"]
+        assert threshold == scenario["threshold"]
+        assert requires_pair is scenario["requires_pair"]
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "helpful_tag", "harmful_tag"),
+    [
+        ("cat_nuclear_winter", "navigation", "severe_disability"),
+        ("cat_global_pandemic", None, "chronic_illness"),
+        ("cat_ice_age", "medicine", "severe_disability"),
+        ("cat_solar_storm", "discipline", None),
+    ],
+)
+def test_endgame_scores_reflect_catalog_helpful_and_harmful_tags(scenario_id: str, helpful_tag: str | None, harmful_tag: str | None):
+    game = _scenario_game(scenario_id)
+
+    base_players = [
+        _player_with_tags(1, ["male", "fertile"]),
+        _player_with_tags(2, ["female", "fertile"]),
+    ]
+    base_score, _, _ = _evaluate_side(game, base_players, "bunker", use_bunker_cards=False, all_players=base_players)
+
+    if helpful_tag:
+        helpful_players = [
+            _player_with_tags(1, ["male", "fertile"], [helpful_tag]),
+            _player_with_tags(2, ["female", "fertile"]),
+        ]
+        helpful_score, _, _ = _evaluate_side(
+            game,
+            helpful_players,
+            "bunker",
+            use_bunker_cards=False,
+            all_players=helpful_players,
+        )
+        assert helpful_score == base_score + 1
+
+    if harmful_tag:
+        harmful_players = [
+            _player_with_tags(1, ["male", "fertile"], [harmful_tag]),
+            _player_with_tags(2, ["female", "fertile"]),
+        ]
+        harmful_score, _, _ = _evaluate_side(
+            game,
+            harmful_players,
+            "bunker",
+            use_bunker_cards=False,
+            all_players=harmful_players,
+        )
+        assert harmful_score == base_score - 2
+
+
+def test_endgame_fails_fast_for_unknown_catastrophe_id():
+    game = _scenario_game("cat_asteroid")
+    game.catastrophe_id = "cat_unknown"
+
+    players = [
+        _player_with_tags(1, ["male", "fertile"]),
+        _player_with_tags(2, ["female", "fertile"]),
+    ]
+
+    with pytest.raises(GameLogicError, match="Неизвестная катастрофа"):
+        _evaluate_side(game, players, "bunker", use_bunker_cards=False, all_players=players)
