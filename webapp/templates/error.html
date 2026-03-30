@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero-card">
+    <h2 class="hero-title">{{ ui.not_found_title }}</h2>
+    <p class="hero-text">{{ message }}</p>
+    <p class="hero-text hero-text--muted">{{ ui.not_found_action }}</p>
+</section>
+{% endblock %}

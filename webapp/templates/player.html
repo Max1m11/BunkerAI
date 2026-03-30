@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block content %}
+<a href="/webapp/{{ game.id }}" class="back-link">{{ ui.back_label }}</a>
+
+<section class="hero-card">
+    <div class="hero-row">
+        <span class="hero-chip">{{ player.status }}</span>
+        <span class="hero-chip">{{ ui.hidden_label }}: {{ player.hidden_count }}</span>
+        <span class="hero-chip">{{ game.mode_label }}</span>
+    </div>
+    <h2 class="hero-title">{{ player.name }}</h2>
+    <p class="hero-text">{{ game.catastrophe_title }}</p>
+    <p class="hero-text hero-text--muted">{{ game.catastrophe_text }}</p>
+</section>
+
+<section class="player-card player-card--static">
+    <h3 class="section-title">{{ ui.open_cards_label }}</h3>
+    {% if player.revealed_cards %}
+    <div class="trait-list">
+        {% for key, value in player.revealed_cards.items() %}
+        <div class="trait-row">
+            <span class="trait-row__label">{{ card_labels[key] }}</span>
+            <span class="trait-row__value">{{ value }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-box">У этого игрока пока нет публично раскрытых карт.</div>
+    {% endif %}
+</section>
+{% endblock %}

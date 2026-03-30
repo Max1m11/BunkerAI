@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>{{ ui.title }}</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <header class="app-header">
+        <div>
+            <div class="eyebrow">{{ ui.game_label }}</div>
+            <h1 class="app-title">{{ ui.title }}</h1>
+        </div>
+        {% if game is defined and game.phase_label %}
+        <div class="phase-pill">{{ game.phase_label }}</div>
+        {% endif %}
+    </header>
+
+    <main class="page-shell">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script>
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+    </script>
+</body>
+</html>
